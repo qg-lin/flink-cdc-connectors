@@ -399,6 +399,36 @@ public class MySqlToDorisE2eITCase extends PipelineTestEnvironment {
 
     @Test
     public void testSyncComments() throws Exception {
+        // create a new table with comments
+        String tableName = "products_with_comment";
+        String mysqlJdbcUrl =
+                String.format(
+                        "jdbc:mysql://%s:%s/%s",
+                        MYSQL.getHost(),
+                        MYSQL.getDatabasePort(),
+                        mysqlInventoryDatabase.getDatabaseName());
+        try (Connection conn =
+                     DriverManager.getConnection(
+                             mysqlJdbcUrl, MYSQL_TEST_USER, MYSQL_TEST_PASSWORD);
+             Statement stat = conn.createStatement()) {
+            String createTableSql =
+                    "CREATE TABLE IF NOT EXISTS `"
+                            + mysqlInventoryDatabase.getDatabaseName()
+                            + "`.`"
+                            + tableName
+                            + "` (\n"
+                            + "  id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT 'column comment of id',\n"
+                            + "  name VARCHAR(255) NOT NULL DEFAULT 'flink' COMMENT 'column comment of name',\n"
+                            + "  description VARCHAR(512) COMMENT 'column comment of description',\n"
+                            + "  weight FLOAT COMMENT 'column comment of weight'\n"
+                            + ") COMMENT 'table comment of products';";
+
+            stat.execute(createTableSql);
+        } catch (SQLException e) {
+            LOG.error("Create table for CDC failed.", e);
+            throw e;
+        }
+
         String pipelineJob =
                 String.format(
                         "source:\n"
@@ -432,36 +462,6 @@ public class MySqlToDorisE2eITCase extends PipelineTestEnvironment {
         submitPipelineJob(pipelineJob, mysqlCdcJar, dorisCdcConnector, mysqlDriverJar);
         waitUntilJobRunning(Duration.ofSeconds(30));
         LOG.info("Pipeline job is running");
-
-        // create a new table with comments
-        String tableName = "products_with_comment";
-        String mysqlJdbcUrl =
-                String.format(
-                        "jdbc:mysql://%s:%s/%s",
-                        MYSQL.getHost(),
-                        MYSQL.getDatabasePort(),
-                        mysqlInventoryDatabase.getDatabaseName());
-        try (Connection conn =
-                        DriverManager.getConnection(
-                                mysqlJdbcUrl, MYSQL_TEST_USER, MYSQL_TEST_PASSWORD);
-                Statement stat = conn.createStatement()) {
-            String createTableSql =
-                    "CREATE TABLE IF NOT EXISTS `"
-                            + mysqlInventoryDatabase.getDatabaseName()
-                            + "`.`"
-                            + tableName
-                            + "` (\n"
-                            + "  id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT 'column comment of id',\n"
-                            + "  name VARCHAR(255) NOT NULL DEFAULT 'flink' COMMENT 'column comment of name',\n"
-                            + "  description VARCHAR(512) COMMENT 'column comment of description',\n"
-                            + "  weight FLOAT COMMENT 'column comment of weight'\n"
-                            + ") COMMENT 'table comment of products';";
-
-            stat.execute(createTableSql);
-        } catch (SQLException e) {
-            LOG.error("Create table for CDC failed.", e);
-            throw e;
-        }
 
         Thread.sleep(3000L);
 
