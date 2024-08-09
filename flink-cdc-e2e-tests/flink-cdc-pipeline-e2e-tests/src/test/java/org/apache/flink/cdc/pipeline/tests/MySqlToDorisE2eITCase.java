@@ -408,9 +408,9 @@ public class MySqlToDorisE2eITCase extends PipelineTestEnvironment {
                         MYSQL.getDatabasePort(),
                         mysqlInventoryDatabase.getDatabaseName());
         try (Connection conn =
-                     DriverManager.getConnection(
-                             mysqlJdbcUrl, MYSQL_TEST_USER, MYSQL_TEST_PASSWORD);
-             Statement stat = conn.createStatement()) {
+                        DriverManager.getConnection(
+                                mysqlJdbcUrl, MYSQL_TEST_USER, MYSQL_TEST_PASSWORD);
+                Statement stat = conn.createStatement()) {
             String createTableSql =
                     "CREATE TABLE IF NOT EXISTS `"
                             + mysqlInventoryDatabase.getDatabaseName()
