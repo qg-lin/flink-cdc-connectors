@@ -40,6 +40,7 @@ import org.testcontainers.lifecycle.Startables;
 
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -49,7 +50,9 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -392,6 +395,114 @@ public class MySqlToDorisE2eITCase extends PipelineTestEnvironment {
             LOG.error("Update table for CDC failed.", e);
             throw e;
         }
+    }
+
+    @Test
+    public void testSyncComments() throws Exception {
+        // create a new table with comments
+        String tableName = "products_with_comment";
+        String mysqlJdbcUrl =
+                String.format(
+                        "jdbc:mysql://%s:%s/%s",
+                        MYSQL.getHost(),
+                        MYSQL.getDatabasePort(),
+                        mysqlInventoryDatabase.getDatabaseName());
+        try (Connection conn =
+                        DriverManager.getConnection(
+                                mysqlJdbcUrl, MYSQL_TEST_USER, MYSQL_TEST_PASSWORD);
+                Statement stat = conn.createStatement()) {
+            String createTableSql =
+                    "CREATE TABLE IF NOT EXISTS `"
+                            + mysqlInventoryDatabase.getDatabaseName()
+                            + "`.`"
+                            + tableName
+                            + "` (\n"
+                            + "  id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT 'column comment of id',\n"
+                            + "  name VARCHAR(255) NOT NULL DEFAULT 'flink' COMMENT 'column comment of name',\n"
+                            + "  description VARCHAR(512) COMMENT 'column comment of description',\n"
+                            + "  weight FLOAT COMMENT 'column comment of weight'\n"
+                            + ") COMMENT 'table comment of products';";
+
+            stat.execute(createTableSql);
+        } catch (SQLException e) {
+            LOG.error("Create table for CDC failed.", e);
+            throw e;
+        }
+
+        String pipelineJob =
+                String.format(
+                        "source:\n"
+                                + "  type: mysql\n"
+                                + "  hostname: mysql\n"
+                                + "  port: 3306\n"
+                                + "  username: %s\n"
+                                + "  password: %s\n"
+                                + "  tables: %s.\\.*\n"
+                                + "  server-id: 5400-5404\n"
+                                + "  server-time-zone: UTC\n"
+                                + "\n"
+                                + "sink:\n"
+                                + "  type: doris\n"
+                                + "  fenodes: doris:8030\n"
+                                + "  benodes: doris:8040\n"
+                                + "  username: %s\n"
+                                + "  password: \"%s\"\n"
+                                + "  table.create.properties.replication_num: 1\n"
+                                + "\n"
+                                + "pipeline:\n"
+                                + "  parallelism: 1",
+                        MYSQL_TEST_USER,
+                        MYSQL_TEST_PASSWORD,
+                        mysqlInventoryDatabase.getDatabaseName(),
+                        DORIS.getUsername(),
+                        DORIS.getPassword());
+        Path mysqlCdcJar = TestUtils.getResource("mysql-cdc-pipeline-connector.jar");
+        Path dorisCdcConnector = TestUtils.getResource("doris-cdc-pipeline-connector.jar");
+        Path mysqlDriverJar = TestUtils.getResource("mysql-driver.jar");
+        submitPipelineJob(pipelineJob, mysqlCdcJar, dorisCdcConnector, mysqlDriverJar);
+        waitUntilJobRunning(Duration.ofSeconds(30));
+        LOG.info("Pipeline job is running");
+
+        Thread.sleep(3000L);
+
+        String tableComment = null;
+        Map<String, String> columnCommentsMap = new HashMap<>();
+        try (Connection conn =
+                        DriverManager.getConnection(
+                                DORIS.getJdbcUrl(
+                                        mysqlInventoryDatabase.getDatabaseName(),
+                                        DORIS.getUsername()));
+                Statement stat = conn.createStatement()) {
+
+            String tableCommentSql =
+                    String.format(
+                            "SELECT TABLE_COMMENT from information_schema.TABLES WHERE TABLE_SCHEMA = '%s' AND TABLE_NAME = '%s'",
+                            mysqlInventoryDatabase.getDatabaseName(), tableName);
+
+            ResultSet resultSet = stat.executeQuery(tableCommentSql);
+            while (resultSet.next()) {
+                tableComment = resultSet.getString(1);
+            }
+
+            DatabaseMetaData databaseMetaData = conn.getMetaData();
+            ResultSet columns =
+                    databaseMetaData.getColumns(
+                            mysqlInventoryDatabase.getDatabaseName(), null, tableName, null);
+            while (columns.next()) {
+                String columnName = columns.getString("COLUMN_NAME");
+                String remarks = columns.getString("REMARKS");
+                columnCommentsMap.put(columnName, remarks);
+            }
+
+        } catch (SQLException e) {
+            LOG.info("Get doris table metadata failure", e);
+            Thread.sleep(1000);
+        }
+        assertEquals("table comment of products", tableComment);
+        assertEquals("column comment of id", columnCommentsMap.get("id"));
+        assertEquals("column comment of name", columnCommentsMap.get("name"));
+        assertEquals("column comment of description", columnCommentsMap.get("description"));
+        assertEquals("column comment of weight", columnCommentsMap.get("weight"));
     }
 
     public static void createDorisDatabase(String databaseName) {
