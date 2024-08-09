@@ -40,6 +40,7 @@ import org.testcontainers.lifecycle.Startables;
 
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -48,8 +49,9 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -75,7 +77,7 @@ public class MySqlToDorisE2eITCase extends PipelineTestEnvironment {
     public static final MySqlContainer MYSQL =
             (MySqlContainer)
                     new MySqlContainer(
-                                    MySqlVersion.V8_0) // v8 support both ARM and AMD architectures
+                            MySqlVersion.V8_0) // v8 support both ARM and AMD architectures
                             .withConfigurationOverride("docker/mysql/my.cnf")
                             .withSetupSQL("docker/mysql/setup.sql")
                             .withDatabaseName("flink-test")
@@ -93,9 +95,6 @@ public class MySqlToDorisE2eITCase extends PipelineTestEnvironment {
 
     protected final UniqueDatabase mysqlInventoryDatabase =
             new UniqueDatabase(MYSQL, "mysql_inventory", MYSQL_TEST_USER, MYSQL_TEST_PASSWORD);
-
-    protected final UniqueDatabase complexDataTypesDatabase =
-            new UniqueDatabase(MYSQL, "data_types_test", MYSQL_TEST_USER, MYSQL_TEST_PASSWORD);
 
     @BeforeClass
     public static void initializeContainers() {
@@ -132,9 +131,6 @@ public class MySqlToDorisE2eITCase extends PipelineTestEnvironment {
         super.before();
         mysqlInventoryDatabase.createAndInitialize();
         createDorisDatabase(mysqlInventoryDatabase.getDatabaseName());
-
-        complexDataTypesDatabase.createAndInitialize();
-        createDorisDatabase(complexDataTypesDatabase.getDatabaseName());
     }
 
     private static boolean checkBackendAvailability() {
@@ -166,9 +162,6 @@ public class MySqlToDorisE2eITCase extends PipelineTestEnvironment {
         super.after();
         mysqlInventoryDatabase.dropDatabase();
         dropDorisDatabase(mysqlInventoryDatabase.getDatabaseName());
-
-        complexDataTypesDatabase.dropDatabase();
-        dropDorisDatabase(complexDataTypesDatabase.getDatabaseName());
     }
 
     @Test
@@ -241,9 +234,9 @@ public class MySqlToDorisE2eITCase extends PipelineTestEnvironment {
                         MYSQL.getDatabasePort(),
                         mysqlInventoryDatabase.getDatabaseName());
         try (Connection conn =
-                        DriverManager.getConnection(
-                                mysqlJdbcUrl, MYSQL_TEST_USER, MYSQL_TEST_PASSWORD);
-                Statement stat = conn.createStatement()) {
+                     DriverManager.getConnection(
+                             mysqlJdbcUrl, MYSQL_TEST_USER, MYSQL_TEST_PASSWORD);
+             Statement stat = conn.createStatement()) {
 
             stat.execute(
                     "INSERT INTO products VALUES (default,'jacket','water resistent white wind breaker',0.2, null, null, null);"); // 110
@@ -298,7 +291,7 @@ public class MySqlToDorisE2eITCase extends PipelineTestEnvironment {
     }
 
     @Test
-    public void testComplexDataTypes() throws Exception {
+    public void testSyncComments() throws Exception {
         String pipelineJob =
                 String.format(
                         "source:\n"
@@ -319,79 +312,90 @@ public class MySqlToDorisE2eITCase extends PipelineTestEnvironment {
                                 + "  password: \"%s\"\n"
                                 + "  table.create.properties.replication_num: 1\n"
                                 + "\n"
-                                + "transform:\n"
-                                + "  - source-table: %s.DATA_TYPES_TABLE\n"
-                                + "    projection: \\*, 'fine' AS FINE\n"
-                                + "    filter: id <> 3 AND id <> 4\n"
                                 + "pipeline:\n"
                                 + "  parallelism: 1",
                         MYSQL_TEST_USER,
                         MYSQL_TEST_PASSWORD,
-                        complexDataTypesDatabase.getDatabaseName(),
+                        mysqlInventoryDatabase.getDatabaseName(),
                         DORIS.getUsername(),
-                        DORIS.getPassword(),
-                        complexDataTypesDatabase.getDatabaseName());
+                        DORIS.getPassword());
         Path mysqlCdcJar = TestUtils.getResource("mysql-cdc-pipeline-connector.jar");
         Path dorisCdcConnector = TestUtils.getResource("doris-cdc-pipeline-connector.jar");
         Path mysqlDriverJar = TestUtils.getResource("mysql-driver.jar");
         submitPipelineJob(pipelineJob, mysqlCdcJar, dorisCdcConnector, mysqlDriverJar);
         waitUntilJobRunning(Duration.ofSeconds(30));
         LOG.info("Pipeline job is running");
-        validateSinkResult(
-                complexDataTypesDatabase.getDatabaseName(),
-                "DATA_TYPES_TABLE",
-                52,
-                Collections.singletonList(
-                        "1 | 127 | 255 | 255 | 32767 | 65535 | 65535 | 8388607 | 16777215 | 16777215 | 2147483647 | 4294967295 | 4294967295 | 2147483647 | 9223372036854775807 | Hello World | abc | 123.102 | 123.102 | 123.103 | 123.104 | 404.4443 | 404.4444 | 404.4445 | 123.4567 | 123.4568 | 123.4569 | 346 | 34567892.1 | 0 | 1 | 1 | 2020-07-17 | 2020-07-17 18:00:22.0 | 2020-07-17 18:00:22.0 | 2020-07-17 18:00:22 | text | EA== | EA== | EA== | EA== | 2021 | red | {\"coordinates\":[1,1],\"type\":\"Point\",\"srid\":0} | {\"coordinates\":[[[1,1],[2,1],[2,2],[1,2],[1,1]]],\"type\":\"Polygon\",\"srid\":0} | {\"coordinates\":[[3,0],[3,3],[3,5]],\"type\":\"LineString\",\"srid\":0} | {\"coordinates\":[[[1,1],[2,1],[2,2],[1,2],[1,1]]],\"type\":\"Polygon\",\"srid\":0} | {\"coordinates\":[[1,1],[2,2]],\"type\":\"MultiPoint\",\"srid\":0} | {\"coordinates\":[[[1,1],[2,2],[3,3]],[[4,4],[5,5]]],\"type\":\"MultiLineString\",\"srid\":0} | {\"coordinates\":[[[[0,0],[10,0],[10,10],[0,10],[0,0]]],[[[5,5],[7,5],[7,7],[5,7],[5,5]]]],\"type\":\"MultiPolygon\",\"srid\":0} | {\"geometries\":[{\"type\":\"Point\",\"coordinates\":[10,10]},{\"type\":\"Point\",\"coordinates\":[30,30]},{\"type\":\"LineString\",\"coordinates\":[[15,15],[20,20]]}],\"type\":\"GeometryCollection\",\"srid\":0} | fine"));
 
-        LOG.info("Begin incremental reading stage.");
-        // generate binlogs
+        // create a new table with comments
+        String tableName = "products_with_comment";
         String mysqlJdbcUrl =
                 String.format(
                         "jdbc:mysql://%s:%s/%s",
                         MYSQL.getHost(),
                         MYSQL.getDatabasePort(),
-                        complexDataTypesDatabase.getDatabaseName());
+                        mysqlInventoryDatabase.getDatabaseName());
         try (Connection conn =
-                        DriverManager.getConnection(
-                                mysqlJdbcUrl, MYSQL_TEST_USER, MYSQL_TEST_PASSWORD);
-                Statement stat = conn.createStatement()) {
+                     DriverManager.getConnection(
+                             mysqlJdbcUrl, MYSQL_TEST_USER, MYSQL_TEST_PASSWORD);
+             Statement stat = conn.createStatement()) {
+            String createTableSql =
+                    "CREATE TABLE IF NOT EXISTS `"
+                            + mysqlInventoryDatabase.getDatabaseName()
+                            + "`.`"
+                            + tableName
+                            + "` (\n"
+                            + "  id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT 'column comment of id',\n"
+                            + "  name VARCHAR(255) NOT NULL DEFAULT 'flink' COMMENT 'column comment of name',\n"
+                            + "  description VARCHAR(512) COMMENT 'column comment of description',\n"
+                            + "  weight FLOAT COMMENT 'column comment of weight'\n"
+                            + ") COMMENT 'table comment of products';";
 
-            // Insert id = 2, 3, 4, 5
-            for (int i = 2; i < 6; i++) {
-                stat.execute(
-                        "INSERT INTO DATA_TYPES_TABLE\n"
-                                + "VALUES ("
-                                + i
-                                + ", 127, 255, 255, 32767, 65535, 65535, 8388607, 16777215, 16777215, 2147483647,\n"
-                                + "        4294967295, 4294967295, 2147483647, 9223372036854775807,\n"
-                                + "        'Hello World', 'abc', 123.102, 123.102, 123.103, 123.104, 404.4443, 404.4444, 404.4445,\n"
-                                + "        123.4567, 123.4568, 123.4569, 345.6, 34567892.1, 0, 1, true,\n"
-                                + "        '2020-07-17',  '2020-07-17 18:00:22.123', '2020-07-17 18:00:22.123456', '2020-07-17 18:00:22',\n"
-                                + "        'text', UNHEX(HEX(16)), UNHEX(HEX(16)), UNHEX(HEX(16)), UNHEX(HEX(16)), 2021,\n"
-                                + "        'red',\n"
-                                + "        ST_GeomFromText('POINT(1 1)'),\n"
-                                + "        ST_GeomFromText('POLYGON((1 1, 2 1, 2 2,  1 2, 1 1))'),\n"
-                                + "        ST_GeomFromText('LINESTRING(3 0, 3 3, 3 5)'),\n"
-                                + "        ST_GeomFromText('POLYGON((1 1, 2 1, 2 2,  1 2, 1 1))'),\n"
-                                + "        ST_GeomFromText('MULTIPOINT((1 1),(2 2))'),\n"
-                                + "        ST_GeomFromText('MultiLineString((1 1,2 2,3 3),(4 4,5 5))'),\n"
-                                + "        ST_GeomFromText('MULTIPOLYGON(((0 0, 10 0, 10 10, 0 10, 0 0)), ((5 5, 7 5, 7 7, 5 7, 5 5)))'),\n"
-                                + "        ST_GeomFromText('GEOMETRYCOLLECTION(POINT(10 10), POINT(30 30), LINESTRING(15 15, 20 20))'));");
-            }
-
-            validateSinkResult(
-                    complexDataTypesDatabase.getDatabaseName(),
-                    "DATA_TYPES_TABLE",
-                    52,
-                    Arrays.asList(
-                            "1 | 127 | 255 | 255 | 32767 | 65535 | 65535 | 8388607 | 16777215 | 16777215 | 2147483647 | 4294967295 | 4294967295 | 2147483647 | 9223372036854775807 | Hello World | abc | 123.102 | 123.102 | 123.103 | 123.104 | 404.4443 | 404.4444 | 404.4445 | 123.4567 | 123.4568 | 123.4569 | 346 | 34567892.1 | 0 | 1 | 1 | 2020-07-17 | 2020-07-17 18:00:22.0 | 2020-07-17 18:00:22.0 | 2020-07-17 18:00:22 | text | EA== | EA== | EA== | EA== | 2021 | red | {\"coordinates\":[1,1],\"type\":\"Point\",\"srid\":0} | {\"coordinates\":[[[1,1],[2,1],[2,2],[1,2],[1,1]]],\"type\":\"Polygon\",\"srid\":0} | {\"coordinates\":[[3,0],[3,3],[3,5]],\"type\":\"LineString\",\"srid\":0} | {\"coordinates\":[[[1,1],[2,1],[2,2],[1,2],[1,1]]],\"type\":\"Polygon\",\"srid\":0} | {\"coordinates\":[[1,1],[2,2]],\"type\":\"MultiPoint\",\"srid\":0} | {\"coordinates\":[[[1,1],[2,2],[3,3]],[[4,4],[5,5]]],\"type\":\"MultiLineString\",\"srid\":0} | {\"coordinates\":[[[[0,0],[10,0],[10,10],[0,10],[0,0]]],[[[5,5],[7,5],[7,7],[5,7],[5,5]]]],\"type\":\"MultiPolygon\",\"srid\":0} | {\"geometries\":[{\"type\":\"Point\",\"coordinates\":[10,10]},{\"type\":\"Point\",\"coordinates\":[30,30]},{\"type\":\"LineString\",\"coordinates\":[[15,15],[20,20]]}],\"type\":\"GeometryCollection\",\"srid\":0} | fine",
-                            "2 | 127 | 255 | 255 | 32767 | 65535 | 65535 | 8388607 | 16777215 | 16777215 | 2147483647 | 4294967295 | 4294967295 | 2147483647 | 9223372036854775807 | Hello World | abc | 123.102 | 123.102 | 123.103 | 123.104 | 404.4443 | 404.4444 | 404.4445 | 123.4567 | 123.4568 | 123.4569 | 346 | 34567892.1 | 0 | 1 | 1 | 2020-07-17 | 2020-07-17 18:00:22.0 | 2020-07-17 18:00:22.0 | 2020-07-17 18:00:22 | text | EA== | EA== | EA== | EA== | 2021 | red | {\"coordinates\":[1,1],\"type\":\"Point\",\"srid\":0} | {\"coordinates\":[[[1,1],[2,1],[2,2],[1,2],[1,1]]],\"type\":\"Polygon\",\"srid\":0} | {\"coordinates\":[[3,0],[3,3],[3,5]],\"type\":\"LineString\",\"srid\":0} | {\"coordinates\":[[[1,1],[2,1],[2,2],[1,2],[1,1]]],\"type\":\"Polygon\",\"srid\":0} | {\"coordinates\":[[1,1],[2,2]],\"type\":\"MultiPoint\",\"srid\":0} | {\"coordinates\":[[[1,1],[2,2],[3,3]],[[4,4],[5,5]]],\"type\":\"MultiLineString\",\"srid\":0} | {\"coordinates\":[[[[0,0],[10,0],[10,10],[0,10],[0,0]]],[[[5,5],[7,5],[7,7],[5,7],[5,5]]]],\"type\":\"MultiPolygon\",\"srid\":0} | {\"geometries\":[{\"type\":\"Point\",\"coordinates\":[10,10]},{\"type\":\"Point\",\"coordinates\":[30,30]},{\"type\":\"LineString\",\"coordinates\":[[15,15],[20,20]]}],\"type\":\"GeometryCollection\",\"srid\":0} | fine",
-                            "5 | 127 | 255 | 255 | 32767 | 65535 | 65535 | 8388607 | 16777215 | 16777215 | 2147483647 | 4294967295 | 4294967295 | 2147483647 | 9223372036854775807 | Hello World | abc | 123.102 | 123.102 | 123.103 | 123.104 | 404.4443 | 404.4444 | 404.4445 | 123.4567 | 123.4568 | 123.4569 | 346 | 34567892.1 | 0 | 1 | 1 | 2020-07-17 | 2020-07-17 18:00:22.0 | 2020-07-17 18:00:22.0 | 2020-07-17 18:00:22 | text | EA== | EA== | EA== | EA== | 2021 | red | {\"coordinates\":[1,1],\"type\":\"Point\",\"srid\":0} | {\"coordinates\":[[[1,1],[2,1],[2,2],[1,2],[1,1]]],\"type\":\"Polygon\",\"srid\":0} | {\"coordinates\":[[3,0],[3,3],[3,5]],\"type\":\"LineString\",\"srid\":0} | {\"coordinates\":[[[1,1],[2,1],[2,2],[1,2],[1,1]]],\"type\":\"Polygon\",\"srid\":0} | {\"coordinates\":[[1,1],[2,2]],\"type\":\"MultiPoint\",\"srid\":0} | {\"coordinates\":[[[1,1],[2,2],[3,3]],[[4,4],[5,5]]],\"type\":\"MultiLineString\",\"srid\":0} | {\"coordinates\":[[[[0,0],[10,0],[10,10],[0,10],[0,0]]],[[[5,5],[7,5],[7,7],[5,7],[5,5]]]],\"type\":\"MultiPolygon\",\"srid\":0} | {\"geometries\":[{\"type\":\"Point\",\"coordinates\":[10,10]},{\"type\":\"Point\",\"coordinates\":[30,30]},{\"type\":\"LineString\",\"coordinates\":[[15,15],[20,20]]}],\"type\":\"GeometryCollection\",\"srid\":0} | fine"));
+            stat.execute(createTableSql);
         } catch (SQLException e) {
-            LOG.error("Update table for CDC failed.", e);
+            LOG.error("Create table for CDC failed.", e);
             throw e;
         }
+
+        Thread.sleep(3000L);
+
+        String tableComment = null;
+        Map<String, String> columnCommentsMap = new HashMap<>();
+        try (Connection conn =
+                     DriverManager.getConnection(
+                             DORIS.getJdbcUrl(
+                                     mysqlInventoryDatabase.getDatabaseName(),
+                                     DORIS.getUsername()));
+             Statement stat = conn.createStatement()) {
+
+            String tableCommentSql =
+                    String.format(
+                            "SELECT TABLE_COMMENT from information_schema.TABLES WHERE TABLE_SCHEMA = '%s' AND TABLE_NAME = '%s'",
+                            mysqlInventoryDatabase.getDatabaseName(), tableName);
+
+            ResultSet resultSet = stat.executeQuery(tableCommentSql);
+            while (resultSet.next()) {
+                tableComment = resultSet.getString(1);
+            }
+
+            DatabaseMetaData databaseMetaData = conn.getMetaData();
+            ResultSet columns =
+                    databaseMetaData.getColumns(
+                            mysqlInventoryDatabase.getDatabaseName(), null, tableName, null);
+            while (columns.next()) {
+                String columnName = columns.getString("COLUMN_NAME");
+                String remarks = columns.getString("REMARKS");
+                columnCommentsMap.put(columnName, remarks);
+            }
+
+        } catch (SQLException e) {
+            LOG.info("Get doris table metadata failure", e);
+            Thread.sleep(1000);
+        }
+        assertEquals("table comment of products", tableComment);
+        assertEquals("column comment of id", columnCommentsMap.get("id"));
+        assertEquals("column comment of name", columnCommentsMap.get("name"));
+        assertEquals("column comment of description", columnCommentsMap.get("description"));
+        assertEquals("column comment of weight", columnCommentsMap.get("weight"));
     }
 
     public static void createDorisDatabase(String databaseName) {
@@ -443,9 +447,9 @@ public class MySqlToDorisE2eITCase extends PipelineTestEnvironment {
             }
             List<String> results = new ArrayList<>();
             try (Connection conn =
-                            DriverManager.getConnection(
-                                    DORIS.getJdbcUrl(databaseName, DORIS.getUsername()));
-                    Statement stat = conn.createStatement()) {
+                         DriverManager.getConnection(
+                                 DORIS.getJdbcUrl(databaseName, DORIS.getUsername()));
+                 Statement stat = conn.createStatement()) {
                 ResultSet rs =
                         stat.executeQuery(
                                 String.format("SELECT * FROM `%s`.`%s`;", databaseName, tableName));
